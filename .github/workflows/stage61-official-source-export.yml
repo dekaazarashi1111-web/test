@@ -43,15 +43,14 @@ jobs:
           done
 
           git clone --depth 1 --filter=blob:none --sparse https://github.com/smogon/pokemon-showdown.git work/showdown
-          git -C work/showdown sparse-checkout set \
-            data/learnsets.ts data/pokedex.ts data/moves.ts data/FORMES.md \
-            data/mods/gen8bdsp data/mods/gen8legends data/mods/gen9legends
-          mkdir -p source_bundle/pokemon-showdown/data
+          git -C work/showdown sparse-checkout set --no-cone \
+            '/data/learnsets.ts' '/data/pokedex.ts' '/data/moves.ts' '/data/FORMES.md' \
+            '/data/mods/gen8bdsp/*' '/data/mods/gen8legends/*' '/data/mods/gen9legends/*'
+          mkdir -p source_bundle/pokemon-showdown/data/mods
           cp work/showdown/data/learnsets.ts source_bundle/pokemon-showdown/data/
           cp work/showdown/data/pokedex.ts source_bundle/pokemon-showdown/data/
           cp work/showdown/data/moves.ts source_bundle/pokemon-showdown/data/
           cp work/showdown/data/FORMES.md source_bundle/pokemon-showdown/data/
-          mkdir -p source_bundle/pokemon-showdown/data/mods
           cp -a work/showdown/data/mods/gen8bdsp source_bundle/pokemon-showdown/data/mods/
           cp -a work/showdown/data/mods/gen8legends source_bundle/pokemon-showdown/data/mods/
           cp -a work/showdown/data/mods/gen9legends source_bundle/pokemon-showdown/data/mods/
