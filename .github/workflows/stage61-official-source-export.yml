@@ -1,0 +1,85 @@
+name: Stage61 official source export
+
+on:
+  push:
+    branches:
+      - stage61-official-learnsets-build
+    paths:
+      - '.github/workflows/stage61-official-source-export.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out bridge repository
+        uses: actions/checkout@v4
+
+      - name: Fetch and pin upstream datasets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p work source_bundle
+
+          git clone --depth 1 https://github.com/Fortelle/pokemon-learnsets.git work/fortelle
+          mkdir -p source_bundle/fortelle
+          rsync -a --exclude='.git' work/fortelle/ source_bundle/fortelle/
+
+          git clone --depth 1 --filter=blob:none --sparse https://github.com/PokeAPI/pokeapi.git work/pokeapi
+          git -C work/pokeapi sparse-checkout set data/v2/csv
+          mkdir -p source_bundle/pokeapi/data/v2/csv
+          for f in \
+            version_groups.csv versions.csv \
+            pokemon_moves.csv pokemon_move_methods.csv pokemon_move_method_prose.csv \
+            pokemon.csv pokemon_species.csv pokemon_species_names.csv \
+            pokemon_forms.csv pokemon_form_names.csv pokemon_form_generations.csv \
+            pokemon_evolution.csv pokemon_game_indices.csv \
+            moves.csv move_names.csv; do
+            cp "work/pokeapi/data/v2/csv/$f" source_bundle/pokeapi/data/v2/csv/
+          done
+
+          git clone --depth 1 --filter=blob:none --sparse https://github.com/smogon/pokemon-showdown.git work/showdown
+          git -C work/showdown sparse-checkout set \
+            data/learnsets.ts data/pokedex.ts data/moves.ts data/FORMES.md \
+            data/mods/gen8bdsp data/mods/gen8legends data/mods/gen9legends
+          mkdir -p source_bundle/pokemon-showdown/data
+          cp work/showdown/data/learnsets.ts source_bundle/pokemon-showdown/data/
+          cp work/showdown/data/pokedex.ts source_bundle/pokemon-showdown/data/
+          cp work/showdown/data/moves.ts source_bundle/pokemon-showdown/data/
+          cp work/showdown/data/FORMES.md source_bundle/pokemon-showdown/data/
+          mkdir -p source_bundle/pokemon-showdown/data/mods
+          cp -a work/showdown/data/mods/gen8bdsp source_bundle/pokemon-showdown/data/mods/
+          cp -a work/showdown/data/mods/gen8legends source_bundle/pokemon-showdown/data/mods/
+          cp -a work/showdown/data/mods/gen9legends source_bundle/pokemon-showdown/data/mods/
+
+          git clone --depth 1 https://github.com/kiasta/PKSE.git work/pkse
+          mkdir -p source_bundle/pkse/tools
+          cp work/pkse/tools/gen_learnsets.py source_bundle/pkse/tools/
+          cp work/pkse/tools/pkhex_source.py source_bundle/pkse/tools/
+
+          {
+            printf 'Fortelle/pokemon-learnsets\t%s\n' "$(git -C work/fortelle rev-parse HEAD)"
+            printf 'PokeAPI/pokeapi\t%s\n' "$(git -C work/pokeapi rev-parse HEAD)"
+            printf 'smogon/pokemon-showdown\t%s\n' "$(git -C work/showdown rev-parse HEAD)"
+            printf 'kiasta/PKSE\t%s\n' "$(git -C work/pkse rev-parse HEAD)"
+            printf 'kwsch/PKHeX_HEAD\t%s\n' "$(git ls-remote https://github.com/kwsch/PKHeX.git HEAD | cut -f1)"
+          } > source_bundle/SOURCE_COMMITS.tsv
+
+          find source_bundle -type f -print0 | sort -z | xargs -0 sha256sum > source_bundle/SOURCE_FILES.sha256
+          tar -czf official-source-bundle.tar.gz source_bundle
+          sha256sum official-source-bundle.tar.gz > official-source-bundle.tar.gz.sha256
+
+      - name: Upload pinned source bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: stage61-official-sources
+          path: |
+            official-source-bundle.tar.gz
+            official-source-bundle.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
