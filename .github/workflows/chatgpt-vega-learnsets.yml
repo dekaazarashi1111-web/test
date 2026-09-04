@@ -1,0 +1,63 @@
+name: ChatGPT Vega learnset source bundle
+
+on:
+  push:
+    branches:
+      - chatgpt-vega-learnsets-20260904
+
+permissions:
+  contents: read
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Build reproducible public-source bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p bundle
+
+          git clone --quiet --no-checkout https://github.com/Fortelle/pokemon-learnsets.git bundle/Fortelle-pokemon-learnsets
+          git -C bundle/Fortelle-pokemon-learnsets checkout --quiet --detach 79351bcf414276f82efda89c474f9de6e837af06
+          rm -rf bundle/Fortelle-pokemon-learnsets/.git
+
+          git clone --quiet --depth 1 https://github.com/Xzonn/PokemonLZADatabase.git bundle/PokemonLZADatabase
+          XZONN_COMMIT=$(git -C bundle/PokemonLZADatabase rev-parse HEAD)
+          rm -rf bundle/PokemonLZADatabase/.git
+
+          mkdir -p bundle/pokemon-showdown/data/mods/gen9legends
+          curl --fail --location --silent --show-error \
+            https://raw.githubusercontent.com/smogon/pokemon-showdown/master/data/learnsets.ts \
+            --output bundle/pokemon-showdown/data/learnsets.ts
+          curl --fail --location --silent --show-error \
+            https://raw.githubusercontent.com/smogon/pokemon-showdown/master/data/pokedex.ts \
+            --output bundle/pokemon-showdown/data/pokedex.ts
+          curl --fail --location --silent --show-error \
+            https://raw.githubusercontent.com/smogon/pokemon-showdown/master/data/moves.ts \
+            --output bundle/pokemon-showdown/data/moves.ts
+          curl --fail --location --silent --show-error \
+            https://raw.githubusercontent.com/smogon/pokemon-showdown/master/data/mods/gen9legends/learnsets.ts \
+            --output bundle/pokemon-showdown/data/mods/gen9legends/learnsets.ts
+          SHOWDOWN_COMMIT=$(git ls-remote https://github.com/smogon/pokemon-showdown.git refs/heads/master | cut -f1)
+
+          cat > bundle/SOURCE_COMMITS.txt <<EOF
+          Fortelle/pokemon-learnsets 79351bcf414276f82efda89c474f9de6e837af06
+          Xzonn/PokemonLZADatabase ${XZONN_COMMIT}
+          smogon/pokemon-showdown ${SHOWDOWN_COMMIT}
+          EOF
+
+          (
+            cd bundle
+            find . -type f ! -name SHA256SUMS.txt -print0 | LC_ALL=C sort -z | xargs -0 sha256sum > SHA256SUMS.txt
+          )
+
+      - name: Upload source bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: vega-learnset-public-sources-20260904
+          path: bundle
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 9
