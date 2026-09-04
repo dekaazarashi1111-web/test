@@ -38,6 +38,9 @@ jobs:
             pokemon.csv pokemon_species.csv pokemon_species_names.csv \
             pokemon_forms.csv pokemon_form_names.csv pokemon_form_generations.csv \
             pokemon_evolution.csv pokemon_game_indices.csv \
+            pokemon_stats.csv pokemon_types.csv pokemon_types_past.csv \
+            pokemon_abilities.csv stats.csv types.csv type_names.csv \
+            abilities.csv ability_names.csv \
             moves.csv move_names.csv; do
             cp "work/pokeapi/data/v2/csv/$f" source_bundle/pokeapi/data/v2/csv/
           done
