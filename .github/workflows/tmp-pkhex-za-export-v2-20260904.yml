@@ -1,0 +1,107 @@
+name: Temporary PKHeX ZA learnset export v2 20260904
+
+on:
+  push:
+    branches: [tmp/pokeapi-data-20260904-1348]
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+      - name: Clone exact PKHeX snapshot and create exporter
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/kwsch/PKHeX.git pkhex
+          cd pkhex
+          git checkout --detach a595033bc255ca1a172a0aded0eb73eb82f1b2d8
+          test "$(git rev-parse HEAD)" = "a595033bc255ca1a172a0aded0eb73eb82f1b2d8"
+          mkdir exporter
+          cat > exporter/Exporter.csproj <<'XML'
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup>
+              <OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework>
+              <ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable>
+            </PropertyGroup>
+            <ItemGroup><ProjectReference Include="../PKHeX.Core/PKHeX.Core.csproj" /></ItemGroup>
+          </Project>
+          XML
+          cat > exporter/Program.cs <<'CS'
+          using System.Globalization;
+          using System.Text;
+          using System.Text.Json;
+          using PKHeX.Core;
+
+          static string C(string? s) => (s ?? "").Replace("\t", " ").Replace("\r", " ").Replace("\n", " ");
+          static string N(string[] a, int i) => (uint)i < (uint)a.Length ? C(a[i]) : "";
+          static string I(int v) => v.ToString(CultureInfo.InvariantCulture);
+
+          var output = Path.GetFullPath(args[0]); Directory.CreateDirectory(output);
+          var ja = GameInfo.GetStrings("ja"); var en = GameInfo.GetStrings("en");
+          var table = PersonalTable.ZA; var source = LearnSource9ZA.Instance;
+          var tms = PersonalInfo9ZA.MachineMoves.ToArray(); var plus = PersonalInfo9ZA.PlusMoves.ToHashSet();
+          var utf8 = new UTF8Encoding(true);
+          var speciesAny = new HashSet<ushort>(); var speciesBase = new HashSet<ushort>(); var used = new HashSet<ushort>();
+          long formRows = 0, levelRows = 0, machineRows = 0;
+          var formsPath = Path.Combine(output, "za_species_forms.tsv");
+          var learnPath = Path.Combine(output, "za_learnsets.tsv");
+          using (var f = new StreamWriter(formsPath, false, utf8))
+          using (var l = new StreamWriter(learnPath, false, utf8))
+          {
+              f.WriteLine("species_id\tform_id\tspecies_name_ja\tspecies_name_en\tis_base_form\tform_count\tdex_index\tis_in_dex\tis_lumiose_native\tis_hyperspace_native\tis_regional_form\tlevel_move_count\tmachine_move_count");
+              l.WriteLine("species_id\tform_id\tspecies_name_ja\tspecies_name_en\tmove_id\tmove_name_ja\tmove_name_en\tmethod\tlevel\tsource_game\tsource_commit");
+              for (ushort s = 1; s <= table.MaxSpeciesID; s++)
+              {
+                  int formCount = Math.Max(1, (int)table[s, 0].FormCount);
+                  for (byte form = 0; form < formCount; form++)
+                  {
+                      var pi = table[s, form]; if (!pi.IsPresentInGame) continue;
+                      speciesAny.Add(s); if (form == 0) speciesBase.Add(s);
+                      var ls = source.GetLearnset(s, form); var moves = ls.GetAllMoves().ToArray(); var levels = ls.GetAllLevels().ToArray();
+                      if (moves.Length != levels.Length) throw new InvalidDataException($"Mismatch {s}/{form}");
+                      int tmCount = 0; for (int i = 0; i < tms.Length; i++) if (pi.GetIsLearnTM(i)) tmCount++;
+                      f.WriteLine(string.Join('\t', I(s), I(form), N(ja.specieslist,s), N(en.specieslist,s), form == 0 ? "1" : "0", I(formCount), I(pi.DexIndex), pi.IsInDex ? "1" : "0", pi.IsLumioseNative ? "1" : "0", pi.IsHyperspaceNative ? "1" : "0", pi.IsRegionalForm ? "1" : "0", I(moves.Length), I(tmCount))); formRows++;
+                      for (int i = 0; i < moves.Length; i++)
+                      {
+                          ushort m = moves[i]; used.Add(m);
+                          l.WriteLine(string.Join('\t', I(s), I(form), N(ja.specieslist,s), N(en.specieslist,s), I(m), N(ja.movelist,m), N(en.movelist,m), "level-up", I(levels[i]), "legends-za", "a595033bc255ca1a172a0aded0eb73eb82f1b2d8")); levelRows++;
+                      }
+                      for (int i = 0; i < tms.Length; i++) if (pi.GetIsLearnTM(i))
+                      {
+                          ushort m = tms[i]; used.Add(m);
+                          l.WriteLine(string.Join('\t', I(s), I(form), N(ja.specieslist,s), N(en.specieslist,s), I(m), N(ja.movelist,m), N(en.movelist,m), "machine", "", "legends-za", "a595033bc255ca1a172a0aded0eb73eb82f1b2d8")); machineRows++;
+                      }
+                  }
+              }
+          }
+          var namesPath = Path.Combine(output, "za_move_names.tsv");
+          using (var n = new StreamWriter(namesPath, false, utf8))
+          {
+              var tmSet = tms.ToHashSet(); n.WriteLine("move_id\tmove_name_ja\tmove_name_en\tis_tm_in_za\tis_plus_eligible_in_za");
+              foreach (ushort m in used.Order()) n.WriteLine(string.Join('\t', I(m), N(ja.movelist,m), N(en.movelist,m), tmSet.Contains(m) ? "1" : "0", plus.Contains(m) ? "1" : "0"));
+          }
+          var meta = new { generated_at_utc = DateTimeOffset.UtcNow, source_repository = "kwsch/PKHeX", source_commit = "a595033bc255ca1a172a0aded0eb73eb82f1b2d8", source_commit_date_utc = "2026-09-02T03:10:21Z", game = "Pokémon LEGENDS Z-A", max_species_id = table.MaxSpeciesID, species_present_any_form = speciesAny.Count, species_present_base_form = speciesBase.Count, present_form_rows = formRows, level_up_rows = levelRows, machine_rows = machineRows, unique_move_ids = used.Count, machine_move_catalog_count = tms.Length, plus_move_catalog_count = plus.Count };
+          File.WriteAllText(Path.Combine(output, "za_source.json"), JsonSerializer.Serialize(meta, new JsonSerializerOptions { WriteIndented = true }), utf8);
+          Console.WriteLine(JsonSerializer.Serialize(meta, new JsonSerializerOptions { WriteIndented = true }));
+          CS
+      - name: Export and upload
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          dotnet run --project pkhex/exporter/Exporter.csproj -c Release -- "$GITHUB_WORKSPACE/out"
+          sha256sum out/* | sort > out/SHA256SUMS.txt
+          wc -l out/*.tsv
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pkhex-za-export-v2-20260904
+          path: out/
+          if-no-files-found: error
+          retention-days: 1
