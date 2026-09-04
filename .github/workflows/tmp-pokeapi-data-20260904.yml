@@ -1,0 +1,44 @@
+name: Temporary PokeAPI data export 20260904
+
+on:
+  push:
+    branches:
+      - tmp/pokeapi-data-20260904-1348
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Download exact PokeAPI release database
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          url='https://github.com/PokeAPI/pokeapi/releases/download/master-branch/db.sqlite3'
+          curl --fail --location --retry 5 --retry-all-errors "$url" --output out/db.sqlite3
+          echo '7a0a729fbeceb8d7143b47176f2e04504cfbfee569651f90350a217d8dd5e4bf  out/db.sqlite3' | sha256sum --check --strict
+          cat > out/source.json <<'JSON'
+          {
+            "repository": "PokeAPI/pokeapi",
+            "release_tag": "master-branch",
+            "commit": "d4f9a4af58ade123fbc0558f68b1c69daa97d9e4",
+            "asset": "db.sqlite3",
+            "asset_id": 543221722,
+            "asset_updated_at_utc": "2026-09-03T19:17:38Z",
+            "sha256": "7a0a729fbeceb8d7143b47176f2e04504cfbfee569651f90350a217d8dd5e4bf"
+          }
+          JSON
+          stat out/db.sqlite3
+          sha256sum out/db.sqlite3 > out/SHA256SUMS.txt
+      - name: Upload temporary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pokeapi-db-20260904
+          path: out/
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
