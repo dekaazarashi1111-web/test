@@ -1,0 +1,236 @@
+name: Temporary PKHeX ZA learnset export 20260904
+
+on:
+  push:
+    branches:
+      - tmp/pokeapi-data-20260904-1348
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+      - name: Check out exact PKHeX source snapshot
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none https://github.com/kwsch/PKHeX.git pkhex
+          cd pkhex
+          git checkout --detach a595033bc255ca1a172a0aded0eb73eb82f1b2d8
+          test "$(git rev-parse HEAD)" = "a595033bc255ca1a172a0aded0eb73eb82f1b2d8"
+      - name: Create deterministic exporter
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p pkhex/exporter
+          cat > pkhex/exporter/Exporter.csproj <<'XML'
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup>
+              <OutputType>Exe</OutputType>
+              <TargetFramework>net10.0</TargetFramework>
+              <ImplicitUsings>enable</ImplicitUsings>
+              <Nullable>enable</Nullable>
+              <InvariantGlobalization>false</InvariantGlobalization>
+            </PropertyGroup>
+            <ItemGroup>
+              <ProjectReference Include="../PKHeX.Core/PKHeX.Core.csproj" />
+            </ItemGroup>
+          </Project>
+          XML
+          cat > pkhex/exporter/Program.cs <<'CS'
+          using System.Globalization;
+          using System.Security.Cryptography;
+          using System.Text;
+          using System.Text.Json;
+          using PKHeX.Core;
+
+          static string Clean(string? value) => (value ?? string.Empty).Replace("\t", " ").Replace("\r", " ").Replace("\n", " ");
+          static string NameAt(string[] values, int index) => (uint)index < (uint)values.Length ? Clean(values[index]) : string.Empty;
+          static string Hash(string path)
+          {
+              using var stream = File.OpenRead(path);
+              return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+          }
+
+          var output = args.Length > 0 ? Path.GetFullPath(args[0]) : Path.GetFullPath("out");
+          Directory.CreateDirectory(output);
+          var ja = GameInfo.GetStrings("ja");
+          var en = GameInfo.GetStrings("en");
+          var table = PersonalTable.ZA;
+          var learnSource = LearnSource9ZA.Instance;
+          var machineMoves = PersonalInfo9ZA.MachineMoves.ToArray();
+          var plusMoves = PersonalInfo9ZA.PlusMoves.ToArray();
+          var utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: true);
+
+          var formsPath = Path.Combine(output, "za_species_forms.tsv");
+          var learnPath = Path.Combine(output, "za_learnsets.tsv");
+          var moveNamesPath = Path.Combine(output, "za_move_names.tsv");
+
+          var presentSpecies = new HashSet<ushort>();
+          var presentBaseSpecies = new HashSet<ushort>();
+          var usedMoves = new HashSet<ushort>();
+          long levelRows = 0;
+          long machineRows = 0;
+          long formRows = 0;
+
+          using (var forms = new StreamWriter(formsPath, false, utf8))
+          using (var learn = new StreamWriter(learnPath, false, utf8))
+          {
+              forms.WriteLine("species_id\tform_id\tspecies_name_ja\tspecies_name_en\tis_present_in_game\tis_base_form\tform_count\tdex_index\tis_in_dex\tis_lumiose_native\tis_hyperspace_native\tis_regional_form\tlocal_form_index\tregional_form_index\tlevel_move_count\tmachine_move_count");
+              learn.WriteLine("species_id\tform_id\tspecies_name_ja\tspecies_name_en\tmove_id\tmove_name_ja\tmove_name_en\tmethod\tlevel\tsource_game\tsource_commit");
+
+              for (ushort species = 1; species <= table.MaxSpeciesID; species++)
+              {
+                  var baseInfo = table[species, 0];
+                  int formCount = Math.Max(1, baseInfo.FormCount);
+                  for (byte form = 0; form < formCount; form++)
+                  {
+                      var info = table[species, form];
+                      if (!info.IsPresentInGame)
+                          continue;
+
+                      presentSpecies.Add(species);
+                      if (form == 0)
+                          presentBaseSpecies.Add(species);
+
+                      var set = learnSource.GetLearnset(species, form);
+                      var moves = set.GetAllMoves().ToArray();
+                      var levels = set.GetAllLevels().ToArray();
+                      if (moves.Length != levels.Length)
+                          throw new InvalidDataException($"Learnset length mismatch: species={species}, form={form}");
+
+                      int tmCount = 0;
+                      for (int i = 0; i < machineMoves.Length; i++)
+                      {
+                          if (info.GetIsLearnTM(i))
+                              tmCount++;
+                      }
+
+                      forms.WriteLine(string.Join('\t',
+                          species.ToString(CultureInfo.InvariantCulture),
+                          form.ToString(CultureInfo.InvariantCulture),
+                          NameAt(ja.specieslist, species),
+                          NameAt(en.specieslist, species),
+                          "1",
+                          form == 0 ? "1" : "0",
+                          formCount.ToString(CultureInfo.InvariantCulture),
+                          info.DexIndex.ToString(CultureInfo.InvariantCulture),
+                          info.IsInDex ? "1" : "0",
+                          info.IsLumioseNative ? "1" : "0",
+                          info.IsHyperspaceNative ? "1" : "0",
+                          info.IsRegionalForm ? "1" : "0",
+                          info.LocalFormIndex.ToString(CultureInfo.InvariantCulture),
+                          info.RegionalFormIndex.ToString(CultureInfo.InvariantCulture),
+                          moves.Length.ToString(CultureInfo.InvariantCulture),
+                          tmCount.ToString(CultureInfo.InvariantCulture)));
+                      formRows++;
+
+                      for (int i = 0; i < moves.Length; i++)
+                      {
+                          ushort move = moves[i];
+                          usedMoves.Add(move);
+                          learn.WriteLine(string.Join('\t',
+                              species.ToString(CultureInfo.InvariantCulture),
+                              form.ToString(CultureInfo.InvariantCulture),
+                              NameAt(ja.specieslist, species),
+                              NameAt(en.specieslist, species),
+                              move.ToString(CultureInfo.InvariantCulture),
+                              NameAt(ja.movelist, move),
+                              NameAt(en.movelist, move),
+                              "level-up",
+                              levels[i].ToString(CultureInfo.InvariantCulture),
+                              "legends-za",
+                              "a595033bc255ca1a172a0aded0eb73eb82f1b2d8"));
+                          levelRows++;
+                      }
+
+                      for (int i = 0; i < machineMoves.Length; i++)
+                      {
+                          if (!info.GetIsLearnTM(i))
+                              continue;
+                          ushort move = machineMoves[i];
+                          usedMoves.Add(move);
+                          learn.WriteLine(string.Join('\t',
+                              species.ToString(CultureInfo.InvariantCulture),
+                              form.ToString(CultureInfo.InvariantCulture),
+                              NameAt(ja.specieslist, species),
+                              NameAt(en.specieslist, species),
+                              move.ToString(CultureInfo.InvariantCulture),
+                              NameAt(ja.movelist, move),
+                              NameAt(en.movelist, move),
+                              "machine",
+                              string.Empty,
+                              "legends-za",
+                              "a595033bc255ca1a172a0aded0eb73eb82f1b2d8"));
+                          machineRows++;
+                      }
+                  }
+              }
+          }
+
+          using (var names = new StreamWriter(moveNamesPath, false, utf8))
+          {
+              names.WriteLine("move_id\tmove_name_ja\tmove_name_en\tis_tm_in_za\tis_plus_eligible_in_za");
+              var machineSet = machineMoves.ToHashSet();
+              var plusSet = plusMoves.ToHashSet();
+              foreach (ushort move in usedMoves.Order())
+              {
+                  names.WriteLine(string.Join('\t',
+                      move.ToString(CultureInfo.InvariantCulture),
+                      NameAt(ja.movelist, move),
+                      NameAt(en.movelist, move),
+                      machineSet.Contains(move) ? "1" : "0",
+                      plusSet.Contains(move) ? "1" : "0"));
+              }
+          }
+
+          var metadata = new
+          {
+              generated_at_utc = DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture),
+              source_repository = "kwsch/PKHeX",
+              source_commit = "a595033bc255ca1a172a0aded0eb73eb82f1b2d8",
+              source_commit_date_utc = "2026-09-02T03:10:21Z",
+              game = "Pokémon LEGENDS Z-A",
+              max_species_id = table.MaxSpeciesID,
+              species_present_any_form = presentSpecies.Count,
+              species_present_base_form = presentBaseSpecies.Count,
+              present_form_rows = formRows,
+              level_up_rows = levelRows,
+              machine_rows = machineRows,
+              unique_move_ids = usedMoves.Count,
+              machine_move_catalog_count = machineMoves.Length,
+              plus_move_catalog_count = plusMoves.Length,
+              files = new Dictionary<string, object>()
+              {
+                  [Path.GetFileName(formsPath)] = new { sha256 = Hash(formsPath), size = new FileInfo(formsPath).Length },
+                  [Path.GetFileName(learnPath)] = new { sha256 = Hash(learnPath), size = new FileInfo(learnPath).Length },
+                  [Path.GetFileName(moveNamesPath)] = new { sha256 = Hash(moveNamesPath), size = new FileInfo(moveNamesPath).Length },
+              }
+          };
+          var metadataPath = Path.Combine(output, "za_source.json");
+          File.WriteAllText(metadataPath, JsonSerializer.Serialize(metadata, new JsonSerializerOptions { WriteIndented = true }), utf8);
+          Console.WriteLine(JsonSerializer.Serialize(metadata, new JsonSerializerOptions { WriteIndented = true }));
+          CS
+      - name: Build and export Z-A data
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          dotnet run --project pkhex/exporter/Exporter.csproj --configuration Release -- "$GITHUB_WORKSPACE/out"
+          sha256sum out/* | sort > out/SHA256SUMS.txt
+          wc -l out/*.tsv
+      - name: Upload temporary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pkhex-za-export-20260904
+          path: out/
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 6
